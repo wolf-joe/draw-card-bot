@@ -80,7 +80,7 @@ class OpenAI:
         url = self.api_base_url + "/v1/chat/completions"
         resp = requests.post(url, headers=head, json=data)
         assert resp.status_code == 200
-        return resp.json()["choices"][0]["text"]
+        return resp.json()["choices"][0]["message"]["content"]
 
 
 class EventHandler:
@@ -220,23 +220,43 @@ class EventHandler:
         elif cmd == "/roll":
             return self.handle_roll(argv[1:])
         else:
-            title = "使用说明"
-            lines = []
-            lines.append([{"tag": "text", "text": "增加集合or成员: /add <集合名称> [<成员名称>]"}])
-            lines.append([{"tag": "text", "text": "列出集合or成员: /ls [<集合名称>]"}])
-            lines.append([{"tag": "text", "text": "删除集合or成员: /del <集合名称> [<成员名称>]"}])
-            lines.append([{"tag": "text", "text": "从集合中抽卡: /roll [<集合名称>]"}])
-            return self.reply_post(title, lines)
+            return self.reply_help()
 
-    def handle_text_gpt(self, text: str):
+    def reply_help(self):
+        lines = []
+        lines.append(
+            [
+                {
+                    "tag": "text",
+                    "text": "向集合里添加成员，请说：向吃饭集合里添加老乡鸡、和府捞面。（或使用指令：/add 吃饭 老乡鸡 和府捞面）",
+                }
+            ]
+        )
+        lines.append([{"tag": "text", "text": "列出所有集合，请说：查看。（或使用指令：/ls）"}])
+        lines.append([{"tag": "text", "text": "列出集合内成员，请说：查看吃饭集合。（或使用指令：/ls 吃饭）"}])
+        # lines.append([{"tag": "text", "text": "删除集合，请说：删掉吃饭集合。（或使用指令：/del 吃饭）"}])
+        lines.append(
+            [
+                {
+                    "tag": "text",
+                    "text": "删除集合内的成员，请说：从吃饭集合里删掉老乡鸡。（或使用指令：/del 吃饭 老乡鸡）",
+                }
+            ]
+        )
+        lines.append(
+            [{"tag": "text", "text": "从集合里随机抽一个成员，请说：从吃饭集合里抽一张。（或使用指令：/roll 吃饭）"}]
+        )
+        self.reply_post("使用说明", lines)
+
+    def handle_text_gpt(self, text: str) -> None:
         prompt = """
         有一个抽卡工具，可以用指令创建/修改集合，并随机从集合内抽取元素。支持的指令如下：
 - 向集合内增加一个或多个成员：/add 集合名称 成员名称1 成员名称2 ...
 - 列出所有集合：/ls
 - 列出集合内的成员：/ls 集合名称
-- 删除集合：/del_set 集合名称
-- 删除集合内的成员：/del_item 集合名称 成员名称
+- 删除集合内的成员：/del 集合名称 成员名称
 - 从集合中抽卡: /roll 集合名称
+- 查看使用说明： /help
 
 你现在扮演一个翻译的角色，将自然语言翻译成具体指令。示例：
 "吃饭可以去老乡鸡、和府捞面" -> "/add 吃饭 老乡鸡 和府捞面"
@@ -244,23 +264,25 @@ class EventHandler:
 "查看吃饭集合" -> "/ls 吃饭"
 "从吃饭里删掉老乡鸡" -> "/del 吃饭 老乡鸡"
 "从吃饭里抽一张" -> "/roll 吃饭"
+"怎么使用" -> "/help"
 
 现在，请将下面的自然语言翻译成具体指令。如果无法翻译，请回复"无法理解"
 "{}" """
-        new_text = OpenAI.recognize(prompt, text)
-        self.reply_text(new_text)
+        try:
+            new_text = OpenAI.recognize(prompt, text)
+        except Exception as e:
+            self.logger.exception(e)
+            self.reply_text("自然语言识别失败，请重试或使用指令操作")
+            return
+        self.logger.info("gpt response: %s", new_text)
+        lines = new_text.strip().split("\n")
+        if len(lines) == 0 or len(lines) > 1 or not lines[0].startswith("/"):
+            self.reply_help()
+            return
+        self.handle_text(lines[0])
 
     def handle_add(self, argv: list[str]):
-        if len(argv) == 1:
-            name = argv[0]
-            if card_set_repo.get_card_set(self.chat_id, name):
-                self.reply_text("集合已存在")
-                return
-            card_set = CardSet(self.chat_id, name, create_by=self.sender_id)
-            card_set_repo.create_or_update_card_set(card_set)
-            self.reply_reaction(EmojiType.DONE)
-            return
-        elif len(argv) >= 2:
+        if len(argv) >= 2:
             name = argv[0]
             card_set = card_set_repo.get_card_set(self.chat_id, name)
             if not card_set:
@@ -269,8 +291,10 @@ class EventHandler:
                 card_set.add_card(item)
             card_set_repo.create_or_update_card_set(card_set)
             self.reply_reaction(EmojiType.DONE)
+            text = '集合"{}"已添加成员：{}'.format(name, ", ".join(argv[1:]))
+            self.reply_text(text)
             return
-        return self.reply_text("/add <集合名称> [<成员名称>]")
+        return self.reply_help()
 
     def handle_ls(self, argv: list[str]):
         if len(argv) == 0:
@@ -312,7 +336,7 @@ class EventHandler:
                 lines.append(line)
             self.reply_post(title, lines)
             return
-        return self.reply_text("/ls [<集合名称>]")
+        self.reply_help()
 
     def handle_del(self, argv: list[str]):
         if len(argv) == 1:
@@ -341,7 +365,7 @@ class EventHandler:
             self.reply_reaction(EmojiType.DONE)
             self.reply_text("已删除成员{}, 权重{}".format(removed.name, removed.weight))
             return
-        return self.reply_text("/del <集合名称> [<成员名称>]")
+        return self.reply_help()
 
     def handle_roll(self, argv: list[str]):
         if len(argv) == 0:
@@ -388,7 +412,7 @@ class EventHandler:
                 self.reply_reaction(EmojiType.THUMBSUP, msg_id)
                 self.reply_reaction(EmojiType.THUMBSDOWN, msg_id)
             return
-        return self.reply_text("/roll <集合名称>")
+        return self.reply_help()
 
     def reply_reaction(self, emoji_type: str, msg_id: str = None):
         if not msg_id:
