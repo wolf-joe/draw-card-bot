@@ -155,16 +155,20 @@ class EventHandler:
         if self.event_type == "im.message.receive_v1":
             content = json.loads(self.data["event"]["message"]["content"])
             text: str = content["text"]
-            # 忽略群聊内非@机器人的消息、非命令消息
-            if self.chat_type == "group":
-                mentions = self.data["event"]["message"].get("mentions", [])
-                if len(mentions) > 1:
+
+            mentions = self.data["event"]["message"].get("mentions", [])
+            if len(mentions) > 1:
+                # 如果at了多个人，则忽略
+                return
+            elif len(mentions) == 1:
+                if mentions[0]["id"]["open_id"] != FEISHU_APP_OPEN_ID:
+                    # 如果at的不是机器人，则忽略
                     return
-                elif len(mentions) == 1:
-                    if mentions[0]["id"]["open_id"] != FEISHU_APP_OPEN_ID:
-                        return
-                    text = text.replace(mentions[0]["key"], "")
-                elif not text.startswith("/"):
+                # 如果at了机器人，则去掉at
+                text = text.replace(mentions[0]["key"], "")
+            elif self.chat_type == "group":
+                if not text.startswith("/"):
+                    # 如果群聊内的消息不是at机器人，也不是命令，则忽略
                     return
             text = text.strip()
             if text.startswith("/"):
@@ -260,7 +264,7 @@ class EventHandler:
 
 你现在扮演一个翻译的角色，将自然语言翻译成具体指令。示例：
 "吃饭可以去老乡鸡、和府捞面" -> "/add 吃饭 老乡鸡 和府捞面"
-"查看" -> "/ls"
+"查看所有集合" -> "/ls"
 "查看吃饭集合" -> "/ls 吃饭"
 "从吃饭里删掉老乡鸡" -> "/del 吃饭 老乡鸡"
 "从吃饭里抽一张" -> "/roll 吃饭"
