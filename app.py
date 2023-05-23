@@ -17,6 +17,7 @@ from repo import CardSetORM, CardSetRepo, RollRecordORM, RollRecordRepo
 
 
 FEISHU_BASE_URL = "https://open.feishu.cn/open-apis"
+FEISHU_APP_OPEN_ID = os.environ["FEISHU_APP_OPEN_ID"]
 
 
 class EmojiType:
@@ -62,6 +63,26 @@ class TokenManager:
         return {"Authorization": "Bearer " + token}
 
 
+class OpenAI:
+    api_key = os.environ["OPENAI_API_KEY"]
+    api_base_url = os.environ["OPENAI_API_BASE_URL"]
+
+    @classmethod
+    def recognize(self, prompt: str, text: str) -> str:
+        head = {"Authorization": "Bearer " + self.api_key}
+        data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [
+                {"role": "system", "content": f"{prompt}"},
+                {"role": "user", "content": text},
+            ],
+        }
+        url = self.api_base_url + "/v1/chat/completions"
+        resp = requests.post(url, headers=head, json=data)
+        assert resp.status_code == 200
+        return resp.json()["choices"][0]["text"]
+
+
 class EventHandler:
     logger: CustomAdapter = None
     data: dict = None
@@ -72,6 +93,12 @@ class EventHandler:
         self.token_manager = token_manager
         req_id = datetime.now().strftime("%Y%m%d%H%M%S") + str(uuid.uuid4())[:8]
         self.logger = CustomAdapter(_logger, {"req_id": req_id})
+
+    @property
+    def chat_type(self) -> str:
+        res = self.data.get("event", {}).get("message", {}).get("chat_type", "")
+        assert res != ""
+        return res
 
     @property
     def event_type(self) -> str:
@@ -127,7 +154,23 @@ class EventHandler:
         self.logger.info("receive data: %s", json.dumps(self.data, ensure_ascii=False))
         if self.event_type == "im.message.receive_v1":
             content = json.loads(self.data["event"]["message"]["content"])
-            self.handle_text(content["text"])
+            text: str = content["text"]
+            # 忽略群聊内非@机器人的消息、非命令消息
+            if self.chat_type == "group":
+                mentions = self.data["event"]["message"].get("mentions", [])
+                if len(mentions) > 1:
+                    return
+                elif len(mentions) == 1:
+                    if mentions[0]["id"]["open_id"] != FEISHU_APP_OPEN_ID:
+                        return
+                    text = text.replace(mentions[0]["key"], "")
+                elif not text.startswith("/"):
+                    return
+            text = text.strip()
+            if text.startswith("/"):
+                self.handle_text(text)
+            else:
+                self.handle_text_gpt(text)
         elif self.event_type == "im.message.reaction.created_v1":
             self.handle_reaction()
         elif self.event_type == "im.message.reaction.deleted_v1":
@@ -168,8 +211,6 @@ class EventHandler:
     def handle_text(self, text: str) -> None:
         argv = text.split()
         cmd = argv[0]
-        if not cmd.startswith("/"):
-            return
         if cmd == "/add":
             return self.handle_add(argv[1:])
         elif cmd == "/ls":
@@ -186,6 +227,28 @@ class EventHandler:
             lines.append([{"tag": "text", "text": "删除集合or成员: /del <集合名称> [<成员名称>]"}])
             lines.append([{"tag": "text", "text": "从集合中抽卡: /roll [<集合名称>]"}])
             return self.reply_post(title, lines)
+
+    def handle_text_gpt(self, text: str):
+        prompt = """
+        有一个抽卡工具，可以用指令创建/修改集合，并随机从集合内抽取元素。支持的指令如下：
+- 向集合内增加一个或多个成员：/add 集合名称 成员名称1 成员名称2 ...
+- 列出所有集合：/ls
+- 列出集合内的成员：/ls 集合名称
+- 删除集合：/del_set 集合名称
+- 删除集合内的成员：/del_item 集合名称 成员名称
+- 从集合中抽卡: /roll 集合名称
+
+你现在扮演一个翻译的角色，将自然语言翻译成具体指令。示例：
+"吃饭可以去老乡鸡、和府捞面" -> "/add 吃饭 老乡鸡 和府捞面"
+"查看" -> "/ls"
+"查看吃饭集合" -> "/ls 吃饭"
+"从吃饭里删掉老乡鸡" -> "/del 吃饭 老乡鸡"
+"从吃饭里抽一张" -> "/roll 吃饭"
+
+现在，请将下面的自然语言翻译成具体指令。如果无法翻译，请回复"无法理解"
+"{}" """
+        new_text = OpenAI.recognize(prompt, text)
+        self.reply_text(new_text)
 
     def handle_add(self, argv: list[str]):
         if len(argv) == 1:
