@@ -159,17 +159,17 @@ class EventHandler:
             mentions = self.data["event"]["message"].get("mentions", [])
             if len(mentions) > 1:
                 # 如果at了多个人，则忽略
-                return
+                return {"msg": "ok"}
             elif len(mentions) == 1:
                 if mentions[0]["id"]["open_id"] != FEISHU_APP_OPEN_ID:
                     # 如果at的不是机器人，则忽略
-                    return
+                    return {"msg": "ok"}
                 # 如果at了机器人，则去掉at
                 text = text.replace(mentions[0]["key"], "")
             elif self.chat_type == "group":
                 if not text.startswith("/"):
                     # 如果群聊内的消息不是at机器人，也不是命令，则忽略
-                    return
+                    return {"msg": "ok"}
             text = text.strip()
             if text.startswith("/"):
                 self.handle_text(text)
@@ -250,6 +250,7 @@ class EventHandler:
         lines.append(
             [{"tag": "text", "text": "从集合里随机抽一个成员，请说：从吃饭集合里抽一张。（或使用指令：/roll 吃饭）"}]
         )
+        lines.append([{"tag": "text", "text": "查看使用说明，请说：怎么使用。（或使用指令：/help）"}])
         self.reply_post("使用说明", lines)
 
     def handle_text_gpt(self, text: str) -> None:
