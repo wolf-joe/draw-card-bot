@@ -227,6 +227,8 @@ class EventHandler:
             return self.handle_del(argv[1:])
         elif cmd == "/roll":
             return self.handle_roll(argv[1:])
+        elif cmd == "/weight":
+            return self.handle_weight(argv[1:])
         else:
             return self.reply_help()
 
@@ -254,6 +256,14 @@ class EventHandler:
         lines.append(
             [{"tag": "text", "text": "从集合里随机抽一个成员，请说：从吃饭集合里抽一张。（或使用指令：/roll 吃饭）"}]
         )
+        lines.append(
+            [
+                {
+                    "tag": "text",
+                    "text": "调整集合里的成员权重，请说：调整吃饭里老乡鸡的权重。（或使用指令：/weight 吃饭 老乡鸡）",
+                }
+            ]
+        )
         lines.append([{"tag": "text", "text": "查看使用说明，请说：怎么使用。（或使用指令：/help）"}])
         self.reply_post("使用说明", lines)
 
@@ -265,6 +275,7 @@ class EventHandler:
 - 列出集合内的成员：/ls 集合名称
 - 删除集合内的成员：/del 集合名称 成员名称
 - 从集合中抽卡: /roll 集合名称
+- 调整集合内成员的权重：/weight 集合名称 成员名称
 - 查看使用说明： /help
 
 你现在扮演一个翻译的角色，将自然语言翻译成具体指令。示例：
@@ -273,6 +284,7 @@ class EventHandler:
 "查看吃饭集合" -> "/ls 吃饭"
 "从吃饭里删掉老乡鸡" -> "/del 吃饭 老乡鸡"
 "从吃饭里抽一张" -> "/roll 吃饭"
+"调整吃饭里老乡鸡的权重" -> "/weight 吃饭 老乡鸡
 "怎么使用" -> "/help"
 
 现在，请将下面的自然语言翻译成具体指令。如果无法翻译，请回复"无法理解"
@@ -383,7 +395,9 @@ class EventHandler:
             if len(card_set_list) == 1:
                 return self.handle_roll([card_set_list[0].name])
             elif len(card_set_list) == 0:
-                self.reply_text("没有集合")
+                self.reply_text(
+                    "没有指定集合，当前可选集合：" + ", ".join(x.name for x in card_set_list)
+                )
                 return
         if len(argv) == 1:
             name = argv[0]
@@ -423,6 +437,46 @@ class EventHandler:
                 self.reply_reaction(EmojiType.THUMBSDOWN, msg_id)
             return
         return self.reply_help()
+
+    def handle_weight(self, argv: list[str]):
+        if len(argv) != 2:
+            return self.reply_help()
+        set_name, card_name = argv[0], argv[1]
+        card_set = card_set_repo.get_card_set(self.chat_id, set_name)
+        if not card_set:
+            self.reply_text("集合不存在")
+            return
+        card = card_set.get_card(card_name)
+        if not card:
+            self.reply_text("成员不存在")
+            return
+
+        title = "调整权重"
+        lines = [
+            [
+                {"tag": "text", "text": "从"},
+                {"tag": "text", "text": card_set.name, "style": ["bold"]},
+                {"tag": "text", "text": "里取出了"},
+                {"tag": "text", "text": card.name, "style": ["bold"]},
+                {"tag": "text", "text": ", 权重"},
+                {"tag": "text", "text": str(card.weight)},
+            ]
+        ]
+        lines.append([{"tag": "text", "text": "-----------------"}])
+        lines.append([{"tag": "text", "text": "在本条消息中回应赞/踩可增减1点权重"}])
+        resp = self.reply_post(title, lines)
+        msg_id = resp.get("data", {}).get("message_id", "")
+        if msg_id:
+            record = RollRecord(
+                self.chat_id,
+                card_set.name,
+                card.name,
+                msg_id,
+                self.sender_id,
+            )
+            roll_record_repo.create_roll_record(record)
+            self.reply_reaction(EmojiType.THUMBSUP, msg_id)
+            self.reply_reaction(EmojiType.THUMBSDOWN, msg_id)
 
     def reply_reaction(self, emoji_type: str, msg_id: str = None):
         if not msg_id:
