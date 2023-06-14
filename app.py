@@ -79,6 +79,8 @@ class OpenAI:
         }
         url = self.api_base_url + "/v1/chat/completions"
         resp = requests.post(url, headers=head, json=data)
+        if resp.status_code != 200:
+            print(resp.status_code, resp.text)
         assert resp.status_code == 200
         return resp.json()["choices"][0]["message"]["content"]
 
@@ -145,7 +147,9 @@ class EventHandler:
 
     def handle(self):
         try:
-            return self._handle()
+            resp = self._handle()
+            self.logger.info("response data: %s", json.dumps(resp, ensure_ascii=False))
+            return resp
         except Exception as e:
             self.logger.exception(e)
             return {"msg": "error"}
@@ -350,10 +354,11 @@ class EventHandler:
             if not card_set:
                 self.reply_text("集合不存在")
                 return
-            if len(card_set.get_cards()) > 0:
-                self.reply_text("集合内有{}个成员, 无法删除非空集合".format(len(card_set.get_cards())))
-                return
+            # if len(card_set.get_cards()) > 0:
+            # self.reply_text("集合内有{}个成员, 无法删除非空集合".format(len(card_set.get_cards())))
+            # return
             card_set_repo.remove_card_set(self.chat_id, name)
+            self.reply_text("已删除集合{}，集合内有{}个成员".format(name, len(card_set.get_cards())))
             self.reply_reaction(EmojiType.DONE)
             return
         elif len(argv) == 2:
